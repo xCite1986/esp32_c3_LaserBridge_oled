@@ -30,20 +30,23 @@ WiFi-Bridge für Laser-Engraver mit GRBL-Firmware. Ermöglicht kabellose Steueru
 | GPIO21 (TX) | Pin 2 (TXD) |
 | GND | GND |
 
+![ESP32-C3 Pinout](https://github.com/xCite1986/esp32_c3_LaserBridge_oled/blob/main/images/esp32_c3_oled_pinout.avif)
+
 ### Verkabelung am CH340G
 
 ```
 CH340G (SOIC-16, Kerbe links)
         ┌───U───┐
    GND -│1    16│- VCC
-   TXD -│2    15│-       ← ESP GPIO21
-   RXD -│3    14│-       ← ESP GPIO20
+   TXD -│2    15│- ..      
+   RXD -│3    14│- ..     
         │  ...  │
         └───────┘
 ```
+Als Alternativer GND-Pin kann auch Pin4/6 von der Pingruppe rechts neben dem Reset-Button verwendet werden.
 
 ![ESP32-C3 connection](https://github.com/xCite1986/esp32_c3_LaserBridge_oled/blob/main/images/board_esp32_c3.jpg)
-![GND connection](https://github.com/xCite1986/esp32_c3_LaserBridge_oled/blob/main/images/board_egnd_pin.jpg)
+![GND connection](https://github.com/xCite1986/esp32_c3_LaserBridge_oled/blob/main/images/board_gnd_pin.jpg)
 ![ESP32-C3 connection](https://github.com/xCite1986/esp32_c3_LaserBridge_oled/blob/main/images/board_tx_rx.jpg)
 
 > **Hinweis:** USB-Kabel vom Laser abstecken wenn WiFi verwendet wird!
@@ -86,7 +89,7 @@ Benötigte Libraries über den Bibliotheksverwalter installieren:
 
 Browser öffnen: `http://[IP-ADRESSE]/`
 
-![WEB-UI](https://github.com/xCite1986/esp32_c3_LaserBridge_oled/blob/main/images/webui.png)
+![WEB-UI](https://github.com/xCite1986/esp32_c3_LaserBridge_oled/blob/main/images/web_ui.png)
 
 Features:
 - **Status** – WiFi, WebSocket, UART-Aktivität
