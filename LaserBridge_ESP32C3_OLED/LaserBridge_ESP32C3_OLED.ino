@@ -36,7 +36,7 @@ static const int OLED_SDA = 5;
 static const int OLED_SCL = 6;
 
 // UART zum Laser
-// ESP32-C3:  GPIO21 = RX, GPIO20 = TX
+// ESP32-C3:  GPIO20 = RX, GPIO21 = TX
 static const int LASER_RX_PIN = 20;   // ESP empfängt hier -> TX des Lasers
 static const int LASER_TX_PIN = 21;   // ESP sendet hier  -> RX des Lasers
 static const uint32_t LASER_BAUD = 115200;
@@ -156,22 +156,15 @@ void checkOledUpdate() {
 // ================ Log-Helfer ========================
 
 void appendToLog(const String& s) {
-  serialLog += s;
-  if (serialLog.length() > MAX_LOG) {
-    serialLog.remove(0, serialLog.length() - MAX_LOG);
-  }
-  
-  // Live an alle UI-WebSocket-Clients senden
-  if (wsUiConnected) {
-    String temp = s;  // Lokale Kopie - broadcastTXT braucht non-const
-    wsUi.broadcastTXT(temp);
-  }
+  // Logging deaktiviert für Performance
+  (void)s;
 }
 
 // ================ OTA Setup =========================
 
 void setupOTA() {
   ArduinoOTA.setHostname(HOSTNAME);
+  ArduinoOTA.setPassword("laserbridge");  // OTA Passwort
   
   ArduinoOTA.onStart([]() {
     String type = (ArduinoOTA.getCommand() == U_FLASH) ? "FW" : "FS";
@@ -394,9 +387,10 @@ function downloadLog() {
   URL.revokeObjectURL(url);
 }
 
-connectLogWebSocket();
+// Log WebSocket deaktiviert für Performance
+// connectLogWebSocket();
 updateStatus();
-setInterval(updateStatus, 2000);
+setInterval(updateStatus, 10000);  // Nur alle 10 Sekunden
 </script>
 </body>
 </html>
@@ -583,6 +577,7 @@ void setup() {
 
   // UART zum Laser
   LaserSerial.begin(LASER_BAUD, SERIAL_8N1, LASER_RX_PIN, LASER_TX_PIN);
+  LaserSerial.setTimeout(10);  // Nur 10ms warten statt 1000ms default
   Serial.println("Laser-UART gestartet.");
 
   // OTA Setup
@@ -614,25 +609,39 @@ void setup() {
 // ======================== LOOP ========================
 
 void loop() {
-  ArduinoOTA.handle();
-  httpServer.handleClient();
-  wsLaser.loop();
-  wsUi.loop();
+  // UART Priorität - mehrfach pro Loop-Durchlauf prüfen
+  for (int i = 0; i < 10; i++) {
+    if (LaserSerial.available() > 0) {
+      uint8_t buf[256];  // Größerer Buffer
+      size_t len = LaserSerial.readBytes(buf, sizeof(buf));
+      if (len > 0) {
+        bytesFromLaser += len;
+        laserActive = true;
+        lastLaserActivity = millis();
 
-  // Daten vom Laser
-  if (LaserSerial.available() > 0) {
-    uint8_t buf[128];
-    size_t len = LaserSerial.readBytes(buf, sizeof(buf));
-    if (len > 0) {
-      bytesFromLaser += len;
-      laserActive = true;
-      lastLaserActivity = millis();
+        String s = String((char*)buf, len);
+        appendToLog(s);
 
-      String s = String((char*)buf, len);
-      appendToLog(s);
-
-      wsLaser.broadcastTXT((char*)buf, len);
+        wsLaser.broadcastTXT((char*)buf, len);
+      }
     }
+    yield();  // Watchdog füttern und System-Tasks erlauben
+  }
+
+  // WebSockets haben Priorität
+  wsLaser.loop();
+  // wsUi.loop();  // Deaktiviert für Performance
+  
+  // HTTP nur wenn Laser idle (oder alle 100ms)
+  static uint32_t lastHttp = 0;
+  if (!laserActive || millis() - lastHttp > 100) {
+    httpServer.handleClient();
+    lastHttp = millis();
+  }
+  
+  // OTA nur prüfen wenn kein aktiver Laser-Job
+  if (!laserActive) {
+    ArduinoOTA.handle();
   }
 
   // Aktivität timeouten
@@ -640,15 +649,17 @@ void loop() {
     laserActive = false;
   }
 
-  // Event-basiertes OLED-Update
-  checkOledUpdate();
-  if (oledNeedsUpdate) {
-    oledShowStatus();
+  // Event-basiertes OLED-Update (nur wenn Laser idle)
+  if (!laserActive) {
+    checkOledUpdate();
+    if (oledNeedsUpdate) {
+      oledShowStatus();
+    }
   }
 
-  // WiFi-Reconnect Check
+  // WiFi-Reconnect Check (seltener prüfen)
   static uint32_t lastWifiCheck = 0;
-  if (millis() - lastWifiCheck > 10000) {
+  if (millis() - lastWifiCheck > 30000) {  // Alle 30 Sekunden statt 10
     lastWifiCheck = millis();
     bool currentWifi = (WiFi.status() == WL_CONNECTED);
     if (currentWifi != wifiConnected) {

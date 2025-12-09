@@ -51,6 +51,8 @@ Als Alternativer GND-Pin kann auch Pin4/6 von der Pingruppe rechts neben dem Res
 
 > **Hinweis:** USB-Kabel vom Laser abstecken wenn WiFi verwendet wird!
 
+Wenn am ende alles läuft, kann der ESP32-C3 direkt vom Lasergravierer-Board mit 5V versorgt werden, beim ACMER S1 ist ein +5V direkt auf der Rückseite.
+
 ## Installation
 
 ### 1. Arduino IDE vorbereiten
