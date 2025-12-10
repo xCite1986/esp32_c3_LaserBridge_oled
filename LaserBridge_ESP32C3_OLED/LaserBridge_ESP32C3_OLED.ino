@@ -199,23 +199,23 @@ void processGrblResponse() {
   while (LaserSerial.available()) {
     char c = LaserSerial.read();
     
-    // Direkt an WebSocket durchleiten (Byte für Byte)
-    if (wsLaserConnected) {
-      uint8_t buf[1] = {(uint8_t)c};
-      wsLaser.broadcastTXT(buf, 1);
-    }
-    
     bytesFromLaser++;
     laserActive = true;
     lastLaserActivity = millis();
     
-    // Zeile sammeln für Log und Job-Verarbeitung
+    // Zeile sammeln
     if (c == '\n') {
+      // Komplette Zeile an WebSocket senden (mit \n)
+      if (wsLaserConnected && lineBuffer.length() > 0) {
+        String toSend = lineBuffer + "\n";
+        wsLaser.broadcastTXT(toSend);
+      }
+      
       lineBuffer.trim();
       
       if (lineBuffer.length() > 0) {
-        // Log (nur wenn kein WS verbunden und kein Job läuft)
-        if (!wsLaserConnected && jobState != JOB_RUNNING && jobState != JOB_PRE_HOMING && jobState != JOB_POST_HOMING) {
+        // Log (nur wenn kein Job läuft)
+        if (jobState != JOB_RUNNING) {
           appendToLog("\n" + lineBuffer);
         }
         
@@ -225,20 +225,19 @@ void processGrblResponse() {
         }
         else if (lineBuffer.startsWith("error:")) {
           waitingForOk = false;
-          Serial.println("[GRBL ERR] " + lineBuffer);
+          Serial.println("GRBL Error: " + lineBuffer);
         }
         else if (lineBuffer.startsWith("ALARM:")) {
-          if (jobState == JOB_RUNNING || jobState == JOB_PRE_HOMING || jobState == JOB_POST_HOMING) {
+          if (jobState == JOB_RUNNING) {
             jobState = JOB_ERROR;
             if (gcodeFile) gcodeFile.close();
             oledNeedsUpdate = true;
           }
-          Serial.println("[GRBL ALARM] " + lineBuffer);
-          appendToLog("\n" + lineBuffer);
+          Serial.println("GRBL Alarm: " + lineBuffer);
         }
         else if (lineBuffer.startsWith("Grbl")) {
-          Serial.println("[GRBL] " + lineBuffer);
-          if (!wsLaserConnected) {
+          Serial.println("GRBL: " + lineBuffer);
+          if (jobState != JOB_RUNNING) {
             appendToLog("\n" + lineBuffer);
           }
         }
@@ -502,45 +501,55 @@ const char MAIN_page[] PROGMEM = R"rawliteral(
 <title>LaserBridge</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0a0a0a;color:#eee;padding:10px;max-width:800px;margin:0 auto}
+body{font-family:system-ui,sans-serif;background:#0a0a0a;color:#eee;padding:10px}
 .card{background:#1a1a1a;border-radius:8px;padding:14px;margin-bottom:10px}
-h1{font-size:18px;margin-bottom:10px}
-h2{font-size:13px;margin:10px 0 6px;color:#666;text-transform:uppercase;letter-spacing:1px}
+h1{font-size:18px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+h2{font-size:14px;margin:12px 0 8px;color:#888;text-transform:uppercase;letter-spacing:1px}
 .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
-.stat{background:#252525;padding:6px;border-radius:4px;text-align:center}
-.stat-label{font-size:9px;color:#555;text-transform:uppercase}
-.stat-value{font-size:13px;font-weight:bold}
-.ok{color:#4caf50}.warn{color:#ff9800}.err{color:#f44336}.idle{color:#666}
-.progress{background:#252525;border-radius:4px;height:20px;margin:8px 0;overflow:hidden;position:relative}
+.stat{background:#252525;padding:8px;border-radius:4px;text-align:center}
+.stat-label{font-size:10px;color:#666;text-transform:uppercase}
+.stat-value{font-size:14px;font-weight:bold;margin-top:2px}
+.ok{color:#4caf50}.warn{color:#ff9800}.err{color:#f44336}.idle{color:#888}
+.progress{background:#252525;border-radius:4px;height:24px;margin:10px 0;overflow:hidden;position:relative}
 .progress-fill{background:linear-gradient(90deg,#4caf50,#8bc34a);height:100%;transition:width 0.3s}
-.progress-text{position:absolute;width:100%;text-align:center;line-height:20px;font-size:11px}
-button{padding:6px 10px;border:none;border-radius:4px;cursor:pointer;font-size:11px;font-weight:500}
+.progress-text{position:absolute;width:100%;text-align:center;line-height:24px;font-size:12px}
+button{padding:8px 12px;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.2s}
 button:hover{filter:brightness(1.1)}
 button:active{transform:scale(0.98)}
-button:disabled{opacity:0.4;cursor:not-allowed}
 .btn-green{background:#4caf50;color:#fff}
 .btn-orange{background:#ff9800;color:#fff}
 .btn-red{background:#f44336;color:#fff}
 .btn-blue{background:#2196f3;color:#fff}
-.btn-gray{background:#333;color:#aaa}
-.btn-sm{padding:4px 6px;font-size:10px}
-.row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
-.upload-zone{border:2px dashed #333;border-radius:6px;padding:20px;text-align:center;cursor:pointer;font-size:12px}
-.upload-zone:hover{border-color:#444;background:#151515}
+.btn-gray{background:#444;color:#fff}
+.btn-sm{padding:4px 8px;font-size:11px}
+.upload-zone{border:2px dashed #333;border-radius:8px;padding:30px;text-align:center;cursor:pointer;transition:all 0.2s}
+.upload-zone:hover{border-color:#555;background:#1f1f1f}
 .upload-zone.drag{border-color:#4caf50;background:#1a2f1a}
-.file-item{display:flex;align-items:center;padding:8px;background:#252525;border-radius:4px;margin:4px 0;gap:8px;font-size:12px}
-.file-item.selected{background:#2e4a2e;outline:1px solid #4caf50}
+.file-item{display:flex;align-items:center;padding:10px;background:#252525;border-radius:6px;margin:6px 0;gap:10px}
+.file-item.selected{background:#2e4a2e;border:1px solid #4caf50}
+.file-icon{font-size:20px}
 .file-info{flex:1;min-width:0}
-.file-name{font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.file-meta{font-size:10px;color:#555}
-.storage-bar{background:#252525;border-radius:3px;height:6px;overflow:hidden}
-.storage-fill{background:#2196f3;height:100%}
-.storage-text{font-size:10px;color:#555;display:flex;justify-content:space-between;margin-top:4px}
-#log{background:#000;color:#0f0;padding:8px;border-radius:4px;height:100px;font-family:monospace;font-size:10px;overflow-y:auto;white-space:pre-wrap}
-input[type=text]{padding:6px;border-radius:4px;border:1px solid #333;background:#252525;color:#eee;font-family:monospace;font-size:12px;flex:1}
+.file-name{font-family:monospace;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-meta{font-size:11px;color:#666;margin-top:2px}
+.file-actions{display:flex;gap:4px}
+.storage-bar{background:#252525;border-radius:4px;height:8px;margin-top:6px;overflow:hidden}
+.storage-fill{background:linear-gradient(90deg,#2196f3,#03a9f4);height:100%;transition:width 0.3s}
+.storage-text{font-size:11px;color:#666;margin-top:4px;display:flex;justify-content:space-between}
+#log{background:#000;color:#0f0;padding:10px;border-radius:4px;height:150px;font-family:monospace;font-size:11px;overflow-y:auto;white-space:pre-wrap}
+.tabs{display:flex;gap:2px;margin-bottom:0}
+.tab{padding:10px 16px;background:#252525;border-radius:6px 6px 0 0;cursor:pointer;font-size:13px;color:#888;transition:all 0.2s}
+.tab:hover{background:#303030}
+.tab.active{background:#1a1a1a;color:#fff}
+.tab-content{display:none;padding-top:14px}
+.tab-content.active{display:block}
+.control-group{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+input[type=text]{padding:8px;border-radius:4px;border:1px solid #333;background:#252525;color:#eee;font-family:monospace;font-size:13px;width:100%}
+.input-row{display:flex;gap:6px;margin:8px 0}
+.input-row input{flex:1}
+.empty-state{text-align:center;padding:30px;color:#555}
+.job-info{font-size:12px;color:#888;margin-top:6px}
 input[type=file]{display:none}
-.section{border-top:1px solid #252525;padding-top:10px;margin-top:10px}
-.job-file{font-size:11px;color:#666}
+.log-header{display:flex;justify-content:space-between;align-items:center}
 </style>
 </head>
 <body>
@@ -550,195 +559,270 @@ input[type=file]{display:none}
   <div class="grid">
     <div class="stat"><div class="stat-label">IP</div><div class="stat-value" id="ip">-</div></div>
     <div class="stat"><div class="stat-label">WiFi</div><div class="stat-value" id="wifi">-</div></div>
-    <div class="stat"><div class="stat-label">WS</div><div class="stat-value" id="ws">-</div></div>
+    <div class="stat"><div class="stat-label">WebSocket</div><div class="stat-value" id="ws">-</div></div>
     <div class="stat"><div class="stat-label">Status</div><div class="stat-value" id="job">-</div></div>
   </div>
   <div class="progress">
     <div class="progress-fill" id="progress" style="width:0%"></div>
-    <div class="progress-text"><span id="line">0</span>/<span id="total">0</span> (<span id="pct">0</span>%)</div>
+    <div class="progress-text"><span id="progressText">0%</span></div>
   </div>
-  <div class="job-file">📄 <span id="jobFile">Keine Datei ausgewählt</span></div>
+  <div class="job-info">📄 <span id="jobFile">-</span> | Zeile <span id="line">0</span> / <span id="total">0</span></div>
 </div>
 
-<div class="card">
-  <h2>📁 Dateien</h2>
-  <div class="upload-zone" id="dropzone">
-    <input type="file" id="fileInput" accept=".gcode,.nc,.gc,.ngc">
-    📤 G-Code hochladen (Drag & Drop)
-  </div>
-  <div id="uploadStatus" style="font-size:11px;margin:6px 0;color:#888"></div>
-  <div id="fileList"></div>
-  
-  <div class="section">
+<div class="tabs">
+  <div class="tab active" onclick="showTab('files')">📁 Dateien</div>
+  <div class="tab" onclick="showTab('control')">🎮 Steuerung</div>
+</div>
+
+<div class="card" style="border-radius:0 8px 8px 8px">
+  <div id="tab-files" class="tab-content active">
+    <div class="upload-zone" id="dropzone">
+      <input type="file" id="fileInput" accept=".gcode,.nc,.gc,.ngc">
+      📤 G-Code Datei hochladen<br>
+      <small style="color:#666">Drag & Drop oder Klicken</small>
+    </div>
+    <div id="uploadStatus" style="font-size:12px;margin:8px 0;min-height:20px"></div>
+    
+    <h2>📂 Gespeicherte Dateien</h2>
+    <div id="fileList"></div>
+    
     <h2>💾 Speicher</h2>
     <div class="storage-bar"><div class="storage-fill" id="storageFill" style="width:0%"></div></div>
-    <div class="storage-text"><span id="storageUsed">-</span><span id="storageFree">-</span></div>
-  </div>
-</div>
-
-<div class="card">
-  <h2>🎮 Steuerung</h2>
-  <div class="row">
-    <button class="btn-green" id="btnStart" onclick="jobCmd('start')" disabled>▶ Start</button>
-    <button class="btn-orange" id="btnPause" onclick="jobCmd('pause')" style="display:none">⏸ Pause</button>
-    <button class="btn-green" id="btnResume" onclick="jobCmd('resume')" style="display:none">▶ Weiter</button>
-    <button class="btn-red" onclick="jobCmd('stop')">⏹ Stop</button>
-    <button class="btn-blue" onclick="grblCmd('unlock')">🔓 Unlock</button>
-    <button class="btn-blue" onclick="grblCmd('home')">🏠 Home</button>
-    <button class="btn-red" onclick="grblCmd('reset')">🔄 Reset</button>
-  </div>
-  
-  <div class="section">
-    <h2>⌨ G-Code</h2>
-    <div class="row">
-      <input type="text" id="gcode" placeholder="G0 X10 Y10" onkeydown="if(event.key==='Enter')sendGcode()">
-      <button class="btn-blue" onclick="sendGcode()">Send</button>
+    <div class="storage-text">
+      <span id="storageUsed">-</span>
+      <span id="storageFree">-</span>
     </div>
   </div>
   
-  <div class="section">
-    <div style="display:flex;justify-content:space-between;align-items:center">
+  <div id="tab-control" class="tab-content">
+    <h2>▶ Job Steuerung</h2>
+    <div class="control-group">
+      <button class="btn-green" id="btnStart" onclick="jobCmd('start')">▶ Start</button>
+      <button class="btn-orange" id="btnPause" onclick="jobCmd('pause')">⏸ Pause</button>
+      <button class="btn-green" id="btnResume" onclick="jobCmd('resume')" style="display:none">▶ Weiter</button>
+      <button class="btn-red" onclick="jobCmd('stop')">⏹ Stop</button>
+    </div>
+    
+    <h2>🔧 GRBL Befehle</h2>
+    <div class="control-group">
+      <button class="btn-blue" onclick="grblCmd('unlock')">🔓 Unlock ($X)</button>
+      <button class="btn-blue" onclick="grblCmd('home')">🏠 Home ($H)</button>
+      <button class="btn-red" onclick="grblCmd('reset')">🔄 Reset</button>
+    </div>
+    
+    <h2>⌨ G-Code senden</h2>
+    <div class="input-row">
+      <input type="text" id="gcode" placeholder="z.B. G0 X10 Y10" onkeydown="if(event.key==='Enter')sendGcode()">
+      <button class="btn-blue" onclick="sendGcode()">Senden</button>
+    </div>
+    
+    <div class="log-header">
       <h2>📋 Log</h2>
-      <button class="btn-gray btn-sm" onclick="clearLog()">Leeren</button>
+      <button class="btn-gray btn-sm" onclick="clearLog()">🗑 Leeren</button>
     </div>
     <div id="log">Warte auf Daten...</div>
-  </div>
-  
-  <div class="section">
+    
     <h2>⚙ System</h2>
-    <div class="row">
-      <button class="btn-orange btn-sm" onclick="if(confirm('WiFi Reset?'))grblCmd('wifireset')">WiFi Reset</button>
-      <button class="btn-gray btn-sm" onclick="location.reload()">Refresh</button>
+    <div class="control-group">
+      <button class="btn-orange" onclick="if(confirm('WiFi-Einstellungen zurücksetzen?'))grblCmd('wifireset')">📶 WiFi Reset</button>
+      <button class="btn-gray" onclick="loadFiles()">🔄 Refresh</button>
     </div>
   </div>
 </div>
 
 <script>
-let selectedFile='';
-let jobState=0;
+let selectedFile = '';
+let currentJobState = 0;
 
-function updateStatus(){
-  fetch('/api/status').then(r=>r.json()).then(s=>{
-    document.getElementById('ip').textContent=s.ip;
-    document.getElementById('wifi').innerHTML=s.wifi?'<span class="ok">✓</span>':'<span class="err">✗</span>';
-    document.getElementById('ws').innerHTML=s.ws?'<span class="ok">✓</span>':'<span class="idle">-</span>';
-    
-    const st=['IDLE','HOME','RUN','HOME','PAUSE','DONE','ERR'];
-    const cl=['idle','warn','ok','warn','warn','ok','err'];
-    jobState=s.job;
-    document.getElementById('job').innerHTML='<span class="'+cl[s.job]+'">'+st[s.job]+'</span>';
-    
-    document.getElementById('line').textContent=s.line;
-    document.getElementById('total').textContent=s.total;
-    const pct=s.total>0?Math.round(s.line*100/s.total):0;
-    document.getElementById('pct').textContent=pct;
-    document.getElementById('progress').style.width=pct+'%';
-    document.getElementById('jobFile').textContent=s.file||'Keine Datei ausgewählt';
-    
-    const active=s.job>=1&&s.job<=4;
-    document.getElementById('btnStart').style.display=active?'none':'';
-    document.getElementById('btnStart').disabled=!selectedFile;
-    document.getElementById('btnPause').style.display=s.job===2?'':'none';
-    document.getElementById('btnResume').style.display=s.job===4?'':'none';
-  }).catch(()=>{});
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector('.tab:nth-child(' + (name==='files'?1:2) + ')').classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
 }
 
-function loadFiles(){
-  fetch('/api/files').then(r=>r.json()).then(files=>{
-    const list=document.getElementById('fileList');
-    if(!files||files.length===0){
-      list.innerHTML='<div style="color:#555;padding:10px;text-align:center">Keine Dateien</div>';
+function updateStatus() {
+  fetch('/api/status').then(r=>r.json()).then(s => {
+    document.getElementById('ip').textContent = s.ip;
+    document.getElementById('wifi').innerHTML = s.wifi ? '<span class="ok">OK</span>' : '<span class="err">✗</span>';
+    document.getElementById('ws').innerHTML = s.ws ? '<span class="ok">OK</span>' : '<span class="idle">-</span>';
+    
+    // States: 0=IDLE, 1=PRE_HOMING, 2=RUNNING, 3=POST_HOMING, 4=PAUSED, 5=COMPLETE, 6=ERROR
+    const states = ['IDLE','HOMING','RUN','HOMING','PAUSE','DONE','ERROR'];
+    const colors = ['idle','warn','ok','warn','warn','ok','err'];
+    currentJobState = s.job;
+    document.getElementById('job').innerHTML = '<span class="'+colors[s.job]+'">'+states[s.job]+'</span>';
+    
+    document.getElementById('line').textContent = s.line;
+    document.getElementById('total').textContent = s.total;
+    document.getElementById('jobFile').textContent = s.file || 'Keine Datei';
+    
+    const pct = s.total > 0 ? Math.round(s.line * 100 / s.total) : 0;
+    document.getElementById('progress').style.width = pct + '%';
+    document.getElementById('progressText').textContent = pct + '%';
+    
+    // Button states - Job aktiv wenn 1, 2, 3 oder 4
+    const jobActive = (s.job >= 1 && s.job <= 4);
+    document.getElementById('btnStart').style.display = jobActive ? 'none' : '';
+    document.getElementById('btnStart').disabled = !selectedFile;
+    document.getElementById('btnPause').style.display = s.job === 2 ? '' : 'none';
+    document.getElementById('btnResume').style.display = s.job === 4 ? '' : 'none';
+  }).catch(e => console.error('Status error:', e));
+}
+
+function loadFiles() {
+  fetch('/api/files').then(r=>r.json()).then(files => {
+    const list = document.getElementById('fileList');
+    
+    if (!files || files.length === 0) {
+      list.innerHTML = '<div class="empty-state">📭 Keine G-Code Dateien vorhanden</div>';
       return;
     }
-    list.innerHTML=files.map(f=>`
-      <div class="file-item${selectedFile===f.name?' selected':''}" onclick="selectFile('${f.name}')">
-        <div class="file-info">
-          <div class="file-name">${f.name}</div>
-          <div class="file-meta">${f.lines} Zeilen · ${(f.size/1024).toFixed(1)}KB</div>
+    
+    list.innerHTML = files.map(f => {
+      const isSelected = selectedFile === f.name;
+      return `
+        <div class="file-item ${isSelected ? 'selected' : ''}" data-file="${f.name}">
+          <div class="file-icon">📄</div>
+          <div class="file-info">
+            <div class="file-name">${f.name}</div>
+            <div class="file-meta">${f.lines} Zeilen • ${(f.size/1024).toFixed(1)} KB</div>
+          </div>
+          <div class="file-actions">
+            <button class="btn-green btn-sm" onclick="event.stopPropagation();playFile('${f.name}')" title="Drucken">▶</button>
+            <button class="btn-red btn-sm" onclick="event.stopPropagation();deleteFile('${f.name}')" title="Löschen">🗑</button>
+          </div>
         </div>
-        <button class="btn-green btn-sm" onclick="event.stopPropagation();playFile('${f.name}')">▶</button>
-        <button class="btn-red btn-sm" onclick="event.stopPropagation();deleteFile('${f.name}')">🗑</button>
-      </div>
-    `).join('');
-  }).catch(()=>{});
+      `;
+    }).join('');
+    
+    list.querySelectorAll('.file-item').forEach(item => {
+      item.onclick = () => selectFile(item.dataset.file);
+    });
+    
+  }).catch(e => {
+    console.error('Files error:', e);
+    document.getElementById('fileList').innerHTML = '<div class="empty-state">❌ Fehler beim Laden</div>';
+  });
   
-  fetch('/api/storage').then(r=>r.json()).then(s=>{
-    const pct=Math.round(s.used*100/s.total);
-    document.getElementById('storageFill').style.width=pct+'%';
-    document.getElementById('storageUsed').textContent=(s.used/1024).toFixed(0)+'KB ('+pct+'%)';
-    document.getElementById('storageFree').textContent=(s.free/1024).toFixed(0)+'KB frei';
-  }).catch(()=>{});
+  fetch('/api/storage').then(r=>r.json()).then(s => {
+    const pct = Math.round((s.used / s.total) * 100);
+    document.getElementById('storageFill').style.width = pct + '%';
+    document.getElementById('storageUsed').textContent = 'Belegt: ' + (s.used/1024).toFixed(1) + ' KB (' + pct + '%)';
+    document.getElementById('storageFree').textContent = 'Frei: ' + (s.free/1024).toFixed(1) + ' KB';
+  }).catch(e => console.error('Storage error:', e));
 }
 
-function selectFile(n){
-  selectedFile=n;
-  document.querySelectorAll('.file-item').forEach(el=>el.classList.toggle('selected',el.querySelector('.file-name').textContent===n));
-  document.getElementById('btnStart').disabled=false;
+function selectFile(name) {
+  selectedFile = name;
+  document.querySelectorAll('.file-item').forEach(item => {
+    item.classList.toggle('selected', item.dataset.file === name);
+  });
+  document.getElementById('btnStart').disabled = false;
 }
 
-function playFile(n){
-  if(jobState>=1&&jobState<=4){alert('Job läuft!');return;}
-  selectedFile=n;
+function playFile(name) {
+  // Job aktiv wenn 1=PRE_HOMING, 2=RUN, 3=POST_HOMING, 4=PAUSED
+  if (currentJobState >= 1 && currentJobState <= 4) {
+    alert('Ein Job läuft bereits!');
+    return;
+  }
+  selectedFile = name;
   jobCmd('start');
 }
 
-function deleteFile(n){
-  if(!confirm('Löschen: '+n+'?'))return;
-  fetch('/api/delete?file='+encodeURIComponent(n)).then(()=>{
-    if(selectedFile===n)selectedFile='';
-    loadFiles();
+function deleteFile(name) {
+  if (!confirm('Datei löschen?\n' + name)) return;
+  fetch('/api/delete?file=' + encodeURIComponent(name)).then(r=>r.json()).then(d => {
+    if (d.ok) {
+      if (selectedFile === name) selectedFile = '';
+      loadFiles();
+    } else {
+      alert('Löschen fehlgeschlagen');
+    }
   });
 }
 
-const dz=document.getElementById('dropzone');
-const fi=document.getElementById('fileInput');
-dz.onclick=()=>fi.click();
-dz.ondragover=e=>{e.preventDefault();dz.classList.add('drag');};
-dz.ondragleave=()=>dz.classList.remove('drag');
-dz.ondrop=e=>{e.preventDefault();dz.classList.remove('drag');if(e.dataTransfer.files.length)upload(e.dataTransfer.files[0]);};
-fi.onchange=()=>{if(fi.files.length)upload(fi.files[0]);fi.value='';};
+// Upload
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+const uploadStatus = document.getElementById('uploadStatus');
 
-function upload(f){
-  document.getElementById('uploadStatus').innerHTML='⏳ '+f.name;
-  const fd=new FormData();fd.append('file',f);
-  fetch('/api/upload',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-    document.getElementById('uploadStatus').innerHTML=d.ok?'✅ '+f.name+' ('+d.lines+' Zeilen)':'❌ Fehler';
-    if(d.ok){selectedFile='/'+f.name;loadFiles();}
-  }).catch(()=>document.getElementById('uploadStatus').innerHTML='❌ Fehler');
+dropzone.onclick = () => fileInput.click();
+dropzone.ondragover = e => { e.preventDefault(); dropzone.classList.add('drag'); };
+dropzone.ondragleave = () => dropzone.classList.remove('drag');
+dropzone.ondrop = e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+};
+fileInput.onchange = () => { if (fileInput.files.length) uploadFile(fileInput.files[0]); fileInput.value=''; };
+
+function uploadFile(file) {
+  uploadStatus.innerHTML = '⏳ Upload: ' + file.name + '...';
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  fetch('/api/upload', { method: 'POST', body: formData })
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) {
+        uploadStatus.innerHTML = '✅ <b>' + file.name + '</b> - ' + d.lines + ' Zeilen';
+        selectedFile = '/' + file.name;
+        loadFiles();
+      } else {
+        uploadStatus.innerHTML = '❌ ' + (d.error || 'Upload fehlgeschlagen');
+      }
+    })
+    .catch(e => uploadStatus.innerHTML = '❌ ' + e);
 }
 
-function jobCmd(a){
-  let u='/api/job?action='+a;
-  if(a==='start'&&selectedFile)u+='&file='+encodeURIComponent(selectedFile);
-  fetch(u).then(()=>updateStatus());
+function jobCmd(action) {
+  let url = '/api/job?action=' + action;
+  if (action === 'start' && selectedFile) {
+    url += '&file=' + encodeURIComponent(selectedFile);
+  }
+  fetch(url).then(() => { updateStatus(); loadFiles(); });
 }
 
-function grblCmd(c){fetch('/api/grbl?cmd='+c);}
-
-function sendGcode(){
-  const i=document.getElementById('gcode');
-  if(i.value.trim())fetch('/api/grbl?cmd=gcode&g='+encodeURIComponent(i.value.trim()));
-  i.value='';
+function grblCmd(cmd) {
+  fetch('/api/grbl?cmd=' + cmd).then(() => updateStatus());
 }
 
-function clearLog(){
-  fetch('/api/grbl?cmd=clearlog').then(()=>document.getElementById('log').textContent='');
+function sendGcode() {
+  const input = document.getElementById('gcode');
+  const g = input.value.trim();
+  if (!g) return;
+  fetch('/api/grbl?cmd=gcode&g=' + encodeURIComponent(g));
+  input.value = '';
 }
 
-function updateLog(){
-  if(jobState>=1&&jobState<=3)return;
-  fetch('/api/log').then(r=>r.text()).then(t=>{
-    const l=document.getElementById('log');
-    l.textContent=t.trim()||'Warte auf Daten...';
-    l.scrollTop=l.scrollHeight;
+function clearLog() {
+  fetch('/api/grbl?cmd=clearlog').then(() => {
+    document.getElementById('log').textContent = 'Log geleert.';
+  });
+}
+
+function updateLog() {
+  // Kein Log-Update während aktivem Job (1=PRE_HOMING, 2=RUN, 3=POST_HOMING)
+  if (currentJobState >= 1 && currentJobState <= 3) return;
+  fetch('/api/log').then(r=>r.text()).then(t => {
+    const log = document.getElementById('log');
+    if (t && t.trim().length > 0) {
+      log.textContent = t;
+    } else {
+      log.textContent = 'Warte auf Daten...';
+    }
+    log.scrollTop = log.scrollHeight;
   }).catch(()=>{});
 }
 
+// Init
 loadFiles();
 updateStatus();
-setInterval(updateStatus,1000);
-setInterval(updateLog,1500);
-setInterval(loadFiles,20000);
+setInterval(updateStatus, 1000);
+setInterval(updateLog, 1500);
+setInterval(loadFiles, 15000);
 </script>
 </body>
 </html>
@@ -866,7 +950,9 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
       Serial.printf("[WS] Client %u connected from %s\n", num, ip.toString().c_str());
       appendToLog("\n[WS connected]");
       oledNeedsUpdate = true;
-      // KEIN Reset hier - LaserGRBL macht das selbst!
+      
+      // Soft-Reset senden um GRBL-Banner zu triggern
+      LaserSerial.write(0x18);
       break;
     }
       
@@ -883,14 +969,21 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
         laserActive = true;
         lastLaserActivity = millis();
         
-        // Direkt an UART senden
-        LaserSerial.write(payload, length);
-        
-        // Debug
+        // Payload als String
         String cmd = String((char*)payload, length);
+        
+        // An GRBL senden
+        LaserSerial.print(cmd);
+        
+        // Falls kein Newline am Ende, hinzufügen
+        if (cmd.length() > 0 && cmd.charAt(cmd.length()-1) != '\n') {
+          LaserSerial.print('\n');
+        }
+        
+        // Debug (nur non-realtime commands)
         cmd.trim();
-        if (cmd.length() > 0 && cmd.length() < 80 && cmd != "?") {
-          Serial.printf("[WS TX] %s\n", cmd.c_str());
+        if (cmd.length() > 0 && cmd.length() < 50 && cmd != "?") {
+          Serial.printf("[WS] >> %s\n", cmd.c_str());
         }
       }
       break;
@@ -901,7 +994,6 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
         laserActive = true;
         lastLaserActivity = millis();
         LaserSerial.write(payload, length);
-        Serial.printf("[WS TX BIN] %d bytes\n", length);
       }
       break;
       
