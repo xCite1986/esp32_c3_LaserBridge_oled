@@ -170,8 +170,8 @@ void checkOledUpdate() {
 // ===================== LOG ==========================
 
 void appendToLog(const String& s) {
-  // Nur loggen wenn kein Job läuft
-  if (jobState == JOB_RUNNING) return;
+  // Nicht loggen wenn Job läuft oder WebSocket-Client verbunden ist
+  if (jobState == JOB_RUNNING || wsLaserConnected) return;
   
   serialLog += s;
   if (serialLog.length() > MAX_LOG) {
@@ -1083,20 +1083,21 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
       wsInputBuffer = "";  // Buffer leeren bei neuer Verbindung
       IPAddress ip = wsLaser.remoteIP(num);
       String logMsg = "\n[WS] Client " + String(num) + " from " + ip.toString();
-      appendToLog(logMsg);
+      // Direkt zum Log (nicht via appendToLog, da wsLaserConnected jetzt true ist)
+      serialLog += logMsg;
       Serial.println(logMsg);
       oledNeedsUpdate = true;
       
       // Soft-Reset senden um GRBL-Banner zu triggern - LaserGRBL erwartet das!
       delay(50);
       LaserSerial.write(0x18);
-      appendToLog("\n[WS] Sent GRBL reset");
+      serialLog += "\n[WS] Sent GRBL reset";
       break;
     }
       
     case WStype_DISCONNECTED: {
       String logMsg = "\n[WS] Client " + String(num) + " disconnected";
-      appendToLog(logMsg);
+      serialLog += logMsg;  // Direkt zum Log
       Serial.printf("[WS] Client %u disconnected (remaining: %d)\n", num, wsLaser.connectedClients());
       wsLaserConnected = wsLaser.connectedClients() > 0;
       wsInputBuffer = "";  // Buffer leeren
@@ -1105,8 +1106,7 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
     }
       
     case WStype_ERROR: {
-      String logMsg = "\n[WS] ERROR client " + String(num);
-      appendToLog(logMsg);
+      serialLog += "\n[WS] ERROR client " + String(num);
       Serial.printf("[WS] Client %u error!\n", num);
       break;
     }
@@ -1116,13 +1116,6 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
         bytesFromWs += length;
         laserActive = true;
         lastLaserActivity = millis();
-        
-        // Debug: erste Nachricht loggen
-        static bool firstMsg = true;
-        if (firstMsg) {
-          appendToLog("\n[WS] First data: " + String(length) + " bytes");
-          firstMsg = false;
-        }
         
         // Daten zum Buffer hinzufügen
         wsInputBuffer += String((char*)payload, length);
