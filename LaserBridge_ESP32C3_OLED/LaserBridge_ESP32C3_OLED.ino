@@ -1,10 +1,16 @@
 /*
- * ESP32-C3 LaserBridge HYBRID
+ * ESP32-C3 LaserBridge HYBRID v2
  *  - WebSocket Bridge für LaserGRBL (ws://IP:81/)
  *  - G-Code Upload & Dateiverwaltung
  *  - Offline-Druck ohne PC
  *  - 0.42" OLED Status
  *  - WiFiManager & OTA
+ *
+ * v2 Änderungen:
+ *  - Robusteres G-Code Parsing (multi-line, CR/LF handling)
+ *  - UI ohne Tabs, alles auf einer Seite
+ *  - Größere UI-Elemente
+ *  - Größeres Log-Fenster
  *
  * Benötigt:
  *  - esp32 Arduino Core
@@ -75,6 +81,9 @@ bool waitingForOk = false;
 uint32_t lastCommandTime = 0;
 const uint32_t COMMAND_TIMEOUT = 30000;
 const uint32_t HOMING_TIMEOUT = 60000;
+
+// WebSocket Input Buffer für robustes Parsing
+String wsInputBuffer = "";
 
 // Log
 String serialLog;
@@ -191,6 +200,42 @@ bool grblSendLine(const String& line) {
   waitingForOk = true;
   lastCommandTime = millis();
   return true;
+}
+
+// Robuste G-Code Zeile senden - entfernt CR, validiert Format
+void grblSendGcodeLine(const String& rawLine) {
+  String line = rawLine;
+  
+  // Alle CR entfernen
+  line.replace("\r", "");
+  line.trim();
+  
+  // Leere Zeilen ignorieren
+  if (line.length() == 0) return;
+  
+  // Realtime Commands (?, !, ~) direkt senden ohne newline
+  if (line.length() == 1) {
+    char c = line.charAt(0);
+    if (c == '?' || c == '!' || c == '~') {
+      LaserSerial.write(c);
+      return;
+    }
+  }
+  
+  // Ctrl+X (Reset) direkt senden
+  if (line.length() == 1 && line.charAt(0) == 0x18) {
+    LaserSerial.write(0x18);
+    return;
+  }
+  
+  // Normale G-Code Zeile mit LF senden
+  LaserSerial.print(line);
+  LaserSerial.write('\n');
+  
+  // Debug (nur non-realtime, kurze commands)
+  if (line.length() < 60 && line != "?") {
+    Serial.printf("[WS->GRBL] %s\n", line.c_str());
+  }
 }
 
 void processGrblResponse() {
@@ -501,58 +546,74 @@ const char MAIN_page[] PROGMEM = R"rawliteral(
 <title>LaserBridge</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0a0a0a;color:#eee;padding:10px}
-.card{background:#1a1a1a;border-radius:8px;padding:14px;margin-bottom:10px}
-h1{font-size:18px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
-h2{font-size:14px;margin:12px 0 8px;color:#888;text-transform:uppercase;letter-spacing:1px}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
-.stat{background:#252525;padding:8px;border-radius:4px;text-align:center}
-.stat-label{font-size:10px;color:#666;text-transform:uppercase}
-.stat-value{font-size:14px;font-weight:bold;margin-top:2px}
+body{font-family:system-ui,sans-serif;background:#0a0a0a;color:#eee;padding:12px;max-width:800px;margin:0 auto}
+.card{background:#1a1a1a;border-radius:10px;padding:16px;margin-bottom:14px}
+h1{font-size:22px;margin-bottom:14px;display:flex;align-items:center;gap:10px}
+h2{font-size:15px;margin:16px 0 10px;color:#888;text-transform:uppercase;letter-spacing:1px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.stat{background:#252525;padding:10px;border-radius:6px;text-align:center}
+.stat-label{font-size:11px;color:#666;text-transform:uppercase}
+.stat-value{font-size:16px;font-weight:bold;margin-top:3px}
 .ok{color:#4caf50}.warn{color:#ff9800}.err{color:#f44336}.idle{color:#888}
-.progress{background:#252525;border-radius:4px;height:24px;margin:10px 0;overflow:hidden;position:relative}
+.progress{background:#252525;border-radius:6px;height:28px;margin:12px 0;overflow:hidden;position:relative}
 .progress-fill{background:linear-gradient(90deg,#4caf50,#8bc34a);height:100%;transition:width 0.3s}
-.progress-text{position:absolute;width:100%;text-align:center;line-height:24px;font-size:12px}
-button{padding:8px 12px;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.2s}
-button:hover{filter:brightness(1.1)}
+.progress-text{position:absolute;width:100%;text-align:center;line-height:28px;font-size:14px;font-weight:500}
+button{padding:12px 18px;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;transition:all 0.2s}
+button:hover{filter:brightness(1.15);transform:translateY(-1px)}
 button:active{transform:scale(0.98)}
+button:disabled{opacity:0.5;cursor:not-allowed;transform:none}
 .btn-green{background:#4caf50;color:#fff}
 .btn-orange{background:#ff9800;color:#fff}
 .btn-red{background:#f44336;color:#fff}
 .btn-blue{background:#2196f3;color:#fff}
 .btn-gray{background:#444;color:#fff}
-.btn-sm{padding:4px 8px;font-size:11px}
-.upload-zone{border:2px dashed #333;border-radius:8px;padding:30px;text-align:center;cursor:pointer;transition:all 0.2s}
-.upload-zone:hover{border-color:#555;background:#1f1f1f}
+.btn-sm{padding:8px 12px;font-size:12px}
+.upload-zone{border:2px dashed #444;border-radius:10px;padding:35px;text-align:center;cursor:pointer;transition:all 0.2s;font-size:16px}
+.upload-zone:hover{border-color:#666;background:#1f1f1f}
 .upload-zone.drag{border-color:#4caf50;background:#1a2f1a}
-.file-item{display:flex;align-items:center;padding:10px;background:#252525;border-radius:6px;margin:6px 0;gap:10px}
-.file-item.selected{background:#2e4a2e;border:1px solid #4caf50}
-.file-icon{font-size:20px}
+.file-item{display:flex;align-items:center;padding:12px;background:#252525;border-radius:8px;margin:8px 0;gap:12px}
+.file-item.selected{background:#2e4a2e;border:2px solid #4caf50}
+.file-icon{font-size:24px}
 .file-info{flex:1;min-width:0}
-.file-name{font-family:monospace;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.file-meta{font-size:11px;color:#666;margin-top:2px}
-.file-actions{display:flex;gap:4px}
-.storage-bar{background:#252525;border-radius:4px;height:8px;margin-top:6px;overflow:hidden}
+.file-name{font-family:monospace;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.file-meta{font-size:12px;color:#666;margin-top:3px}
+.file-actions{display:flex;gap:6px}
+.storage-bar{background:#252525;border-radius:6px;height:10px;margin-top:8px;overflow:hidden}
 .storage-fill{background:linear-gradient(90deg,#2196f3,#03a9f4);height:100%;transition:width 0.3s}
-.storage-text{font-size:11px;color:#666;margin-top:4px;display:flex;justify-content:space-between}
-#log{background:#000;color:#0f0;padding:10px;border-radius:4px;height:150px;font-family:monospace;font-size:11px;overflow-y:auto;white-space:pre-wrap}
-.tabs{display:flex;gap:2px;margin-bottom:0}
-.tab{padding:10px 16px;background:#252525;border-radius:6px 6px 0 0;cursor:pointer;font-size:13px;color:#888;transition:all 0.2s}
-.tab:hover{background:#303030}
-.tab.active{background:#1a1a1a;color:#fff}
-.tab-content{display:none;padding-top:14px}
-.tab-content.active{display:block}
-.control-group{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
-input[type=text]{padding:8px;border-radius:4px;border:1px solid #333;background:#252525;color:#eee;font-family:monospace;font-size:13px;width:100%}
-.input-row{display:flex;gap:6px;margin:8px 0}
+.storage-text{font-size:12px;color:#666;margin-top:6px;display:flex;justify-content:space-between}
+#log{background:#000;color:#0f0;padding:12px;border-radius:6px;height:300px;font-family:'Consolas','Monaco',monospace;font-size:12px;overflow-y:auto;white-space:pre-wrap;line-height:1.4}
+.control-group{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+input[type=text]{padding:12px;border-radius:6px;border:1px solid #444;background:#252525;color:#eee;font-family:monospace;font-size:14px;width:100%}
+input[type=text]:focus{outline:none;border-color:#2196f3}
+.input-row{display:flex;gap:8px;margin:10px 0}
 .input-row input{flex:1}
-.empty-state{text-align:center;padding:30px;color:#555}
-.job-info{font-size:12px;color:#888;margin-top:6px}
+.empty-state{text-align:center;padding:40px;color:#555;font-size:15px}
+.job-info{font-size:13px;color:#888;margin-top:8px}
 input[type=file]{display:none}
 .log-header{display:flex;justify-content:space-between;align-items:center}
+.section{margin-top:20px}
+.divider{height:1px;background:#333;margin:20px 0}
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:#1a1a1a;border-radius:12px;padding:24px;max-width:400px;width:90%;text-align:center}
+.modal h3{margin-bottom:16px;font-size:18px}
+.modal p{color:#888;margin-bottom:20px;font-size:14px}
+.modal-buttons{display:flex;gap:12px;justify-content:center}
 </style>
 </head>
 <body>
+
+<!-- WiFi Reset Modal -->
+<div class="modal-overlay" id="wifiModal">
+  <div class="modal">
+    <h3>⚠️ WiFi zurücksetzen?</h3>
+    <p>Das Gerät startet neu und öffnet einen Access Point zur Neukonfiguration. Die aktuelle WiFi-Verbindung wird gelöscht.</p>
+    <div class="modal-buttons">
+      <button class="btn-gray" onclick="closeWifiModal()">Abbrechen</button>
+      <button class="btn-orange" onclick="confirmWifiReset()">Ja, zurücksetzen</button>
+    </div>
+  </div>
+</div>
 
 <div class="card">
   <h1>🔥 LaserBridge</h1>
@@ -569,64 +630,70 @@ input[type=file]{display:none}
   <div class="job-info">📄 <span id="jobFile">-</span> | Zeile <span id="line">0</span> / <span id="total">0</span></div>
 </div>
 
-<div class="tabs">
-  <div class="tab active" onclick="showTab('files')">📁 Dateien</div>
-  <div class="tab" onclick="showTab('control')">🎮 Steuerung</div>
+<div class="card">
+  <h2>📤 G-Code Upload</h2>
+  <div class="upload-zone" id="dropzone">
+    <input type="file" id="fileInput" accept=".gcode,.nc,.gc,.ngc">
+    📤 G-Code Datei hochladen<br>
+    <small style="color:#666">Drag & Drop oder Klicken</small>
+  </div>
+  <div id="uploadStatus" style="font-size:13px;margin:10px 0;min-height:24px"></div>
+  
+  <div class="divider"></div>
+  
+  <h2>📂 Gespeicherte Dateien</h2>
+  <div id="fileList"></div>
+  
+  <div class="divider"></div>
+  
+  <h2>💾 Speicher</h2>
+  <div class="storage-bar"><div class="storage-fill" id="storageFill" style="width:0%"></div></div>
+  <div class="storage-text">
+    <span id="storageUsed">-</span>
+    <span id="storageFree">-</span>
+  </div>
 </div>
 
-<div class="card" style="border-radius:0 8px 8px 8px">
-  <div id="tab-files" class="tab-content active">
-    <div class="upload-zone" id="dropzone">
-      <input type="file" id="fileInput" accept=".gcode,.nc,.gc,.ngc">
-      📤 G-Code Datei hochladen<br>
-      <small style="color:#666">Drag & Drop oder Klicken</small>
-    </div>
-    <div id="uploadStatus" style="font-size:12px;margin:8px 0;min-height:20px"></div>
-    
-    <h2>📂 Gespeicherte Dateien</h2>
-    <div id="fileList"></div>
-    
-    <h2>💾 Speicher</h2>
-    <div class="storage-bar"><div class="storage-fill" id="storageFill" style="width:0%"></div></div>
-    <div class="storage-text">
-      <span id="storageUsed">-</span>
-      <span id="storageFree">-</span>
-    </div>
+<div class="card">
+  <h2>▶ Job Steuerung</h2>
+  <div class="control-group">
+    <button class="btn-green" id="btnStart" onclick="jobCmd('start')" disabled>▶ Start</button>
+    <button class="btn-orange" id="btnPause" onclick="jobCmd('pause')">⏸ Pause</button>
+    <button class="btn-green" id="btnResume" onclick="jobCmd('resume')" style="display:none">▶ Weiter</button>
+    <button class="btn-red" onclick="jobCmd('stop')">⏹ Stop</button>
   </div>
   
-  <div id="tab-control" class="tab-content">
-    <h2>▶ Job Steuerung</h2>
-    <div class="control-group">
-      <button class="btn-green" id="btnStart" onclick="jobCmd('start')">▶ Start</button>
-      <button class="btn-orange" id="btnPause" onclick="jobCmd('pause')">⏸ Pause</button>
-      <button class="btn-green" id="btnResume" onclick="jobCmd('resume')" style="display:none">▶ Weiter</button>
-      <button class="btn-red" onclick="jobCmd('stop')">⏹ Stop</button>
-    </div>
-    
-    <h2>🔧 GRBL Befehle</h2>
-    <div class="control-group">
-      <button class="btn-blue" onclick="grblCmd('unlock')">🔓 Unlock ($X)</button>
-      <button class="btn-blue" onclick="grblCmd('home')">🏠 Home ($H)</button>
-      <button class="btn-red" onclick="grblCmd('reset')">🔄 Reset</button>
-    </div>
-    
-    <h2>⌨ G-Code senden</h2>
-    <div class="input-row">
-      <input type="text" id="gcode" placeholder="z.B. G0 X10 Y10" onkeydown="if(event.key==='Enter')sendGcode()">
-      <button class="btn-blue" onclick="sendGcode()">Senden</button>
-    </div>
-    
-    <div class="log-header">
-      <h2>📋 Log</h2>
-      <button class="btn-gray btn-sm" onclick="clearLog()">🗑 Leeren</button>
-    </div>
-    <div id="log">Warte auf Daten...</div>
-    
-    <h2>⚙ System</h2>
-    <div class="control-group">
-      <button class="btn-orange" onclick="if(confirm('WiFi-Einstellungen zurücksetzen?'))grblCmd('wifireset')">📶 WiFi Reset</button>
-      <button class="btn-gray" onclick="loadFiles()">🔄 Refresh</button>
-    </div>
+  <div class="divider"></div>
+  
+  <h2>🔧 GRBL Befehle</h2>
+  <div class="control-group">
+    <button class="btn-blue" onclick="grblCmd('unlock')">🔓 Unlock ($X)</button>
+    <button class="btn-blue" onclick="grblCmd('home')">🏠 Home ($H)</button>
+    <button class="btn-red" onclick="grblCmd('reset')">🔄 Reset</button>
+  </div>
+  
+  <div class="divider"></div>
+  
+  <h2>⌨ G-Code senden</h2>
+  <div class="input-row">
+    <input type="text" id="gcode" placeholder="z.B. G0 X10 Y10" onkeydown="if(event.key==='Enter')sendGcode()">
+    <button class="btn-blue" onclick="sendGcode()">Senden</button>
+  </div>
+  
+  <div class="divider"></div>
+  
+  <div class="log-header">
+    <h2>📋 Log</h2>
+    <button class="btn-gray btn-sm" onclick="clearLog()">🗑 Leeren</button>
+  </div>
+  <div id="log">Warte auf Daten...</div>
+  
+  <div class="divider"></div>
+  
+  <h2>⚙ System</h2>
+  <div class="control-group">
+    <button class="btn-orange" onclick="showWifiModal()">📶 WiFi Reset</button>
+    <button class="btn-gray" onclick="loadFiles()">🔄 Refresh</button>
   </div>
 </div>
 
@@ -634,12 +701,24 @@ input[type=file]{display:none}
 let selectedFile = '';
 let currentJobState = 0;
 
-function showTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.querySelector('.tab:nth-child(' + (name==='files'?1:2) + ')').classList.add('active');
-  document.getElementById('tab-' + name).classList.add('active');
+// WiFi Reset Modal
+function showWifiModal() {
+  document.getElementById('wifiModal').classList.add('show');
 }
+
+function closeWifiModal() {
+  document.getElementById('wifiModal').classList.remove('show');
+}
+
+function confirmWifiReset() {
+  closeWifiModal();
+  grblCmd('wifireset');
+}
+
+// Schließen bei Klick außerhalb
+document.getElementById('wifiModal').onclick = function(e) {
+  if (e.target === this) closeWifiModal();
+};
 
 function updateStatus() {
   fetch('/api/status').then(r=>r.json()).then(s => {
@@ -942,10 +1021,39 @@ void handleGrbl() {
 
 // ================== WEBSOCKET =======================
 
+// Verarbeitet gepufferte WebSocket-Daten zeilenweise
+void processWsBuffer() {
+  while (true) {
+    // Suche nach Zeilenende (LF oder CRLF)
+    int lfPos = wsInputBuffer.indexOf('\n');
+    if (lfPos < 0) break;  // Keine komplette Zeile vorhanden
+    
+    // Zeile extrahieren
+    String line = wsInputBuffer.substring(0, lfPos);
+    wsInputBuffer.remove(0, lfPos + 1);
+    
+    // CR am Ende entfernen falls vorhanden
+    if (line.endsWith("\r")) {
+      line.remove(line.length() - 1);
+    }
+    
+    // Zeile verarbeiten
+    grblSendGcodeLine(line);
+  }
+  
+  // Buffer-Überlauf verhindern
+  if (wsInputBuffer.length() > 256) {
+    Serial.println("[WS] Buffer overflow, flushing");
+    grblSendGcodeLine(wsInputBuffer);
+    wsInputBuffer = "";
+  }
+}
+
 void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED: {
       wsLaserConnected = true;
+      wsInputBuffer = "";  // Buffer leeren bei neuer Verbindung
       IPAddress ip = wsLaser.remoteIP(num);
       Serial.printf("[WS] Client %u connected from %s\n", num, ip.toString().c_str());
       appendToLog("\n[WS connected]");
@@ -959,6 +1067,7 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
     case WStype_DISCONNECTED:
       Serial.printf("[WS] Client %u disconnected\n", num);
       wsLaserConnected = wsLaser.connectedClients() > 0;
+      wsInputBuffer = "";  // Buffer leeren
       appendToLog("\n[WS disconnected]");
       oledNeedsUpdate = true;
       break;
@@ -969,22 +1078,11 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
         laserActive = true;
         lastLaserActivity = millis();
         
-        // Payload als String
-        String cmd = String((char*)payload, length);
+        // Daten zum Buffer hinzufügen
+        wsInputBuffer += String((char*)payload, length);
         
-        // An GRBL senden
-        LaserSerial.print(cmd);
-        
-        // Falls kein Newline am Ende, hinzufügen
-        if (cmd.length() > 0 && cmd.charAt(cmd.length()-1) != '\n') {
-          LaserSerial.print('\n');
-        }
-        
-        // Debug (nur non-realtime commands)
-        cmd.trim();
-        if (cmd.length() > 0 && cmd.length() < 50 && cmd != "?") {
-          Serial.printf("[WS] >> %s\n", cmd.c_str());
-        }
+        // Buffer verarbeiten
+        processWsBuffer();
       }
       break;
       
@@ -993,7 +1091,19 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
         bytesFromWs += length;
         laserActive = true;
         lastLaserActivity = millis();
-        LaserSerial.write(payload, length);
+        
+        // Binärdaten: Byte für Byte prüfen auf Realtime-Commands
+        for (size_t i = 0; i < length; i++) {
+          uint8_t b = payload[i];
+          // Realtime commands direkt durchreichen
+          if (b == '?' || b == '!' || b == '~' || b == 0x18) {
+            LaserSerial.write(b);
+          } else {
+            // Andere Bytes zum Buffer hinzufügen
+            wsInputBuffer += (char)b;
+          }
+        }
+        processWsBuffer();
       }
       break;
       
@@ -1007,7 +1117,7 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("\n\n=== LaserBridge HYBRID ===");
+  Serial.println("\n\n=== LaserBridge HYBRID v2 ===");
 
   oledInit();
   oledShowMessage("Starting...");
@@ -1077,7 +1187,7 @@ void setup() {
   Serial.println("  LaserGRBL: ws://" + WiFi.localIP().toString() + ":81/");
 
   Serial.println("\n=== READY ===\n");
-  appendToLog("LaserBridge gestartet\n");
+  appendToLog("LaserBridge v2 gestartet\n");
 }
 
 // ===================== LOOP =========================
