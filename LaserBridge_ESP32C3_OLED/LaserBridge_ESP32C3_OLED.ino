@@ -1023,6 +1023,22 @@ void handleGrbl() {
 
 // Verarbeitet gepufferte WebSocket-Daten zeilenweise
 void processWsBuffer() {
+  // Zuerst: Realtime-Commands am Anfang des Buffers sofort verarbeiten
+  while (wsInputBuffer.length() > 0) {
+    char c = wsInputBuffer.charAt(0);
+    
+    // Realtime Commands (?, !, ~, Ctrl+X) direkt senden
+    if (c == '?' || c == '!' || c == '~' || c == 0x18) {
+      LaserSerial.write(c);
+      wsInputBuffer.remove(0, 1);
+      continue;
+    }
+    
+    // Keine weiteren Realtime-Commands am Anfang
+    break;
+  }
+  
+  // Dann: Normale Zeilen verarbeiten
   while (true) {
     // Suche nach Zeilenende (LF oder CRLF)
     int lfPos = wsInputBuffer.indexOf('\n');
@@ -1041,6 +1057,17 @@ void processWsBuffer() {
     grblSendGcodeLine(line);
   }
   
+  // Nochmal Realtime-Commands prüfen (könnten nach einer Zeile kommen)
+  while (wsInputBuffer.length() > 0) {
+    char c = wsInputBuffer.charAt(0);
+    if (c == '?' || c == '!' || c == '~' || c == 0x18) {
+      LaserSerial.write(c);
+      wsInputBuffer.remove(0, 1);
+      continue;
+    }
+    break;
+  }
+  
   // Buffer-Überlauf verhindern
   if (wsInputBuffer.length() > 256) {
     Serial.println("[WS] Buffer overflow, flushing");
@@ -1055,28 +1082,47 @@ void wsLaserEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) 
       wsLaserConnected = true;
       wsInputBuffer = "";  // Buffer leeren bei neuer Verbindung
       IPAddress ip = wsLaser.remoteIP(num);
-      Serial.printf("[WS] Client %u connected from %s\n", num, ip.toString().c_str());
-      appendToLog("\n[WS connected]");
+      String logMsg = "\n[WS] Client " + String(num) + " from " + ip.toString();
+      appendToLog(logMsg);
+      Serial.println(logMsg);
       oledNeedsUpdate = true;
       
-      // Soft-Reset senden um GRBL-Banner zu triggern
+      // Soft-Reset senden um GRBL-Banner zu triggern - LaserGRBL erwartet das!
+      delay(50);
       LaserSerial.write(0x18);
+      appendToLog("\n[WS] Sent GRBL reset");
       break;
     }
       
-    case WStype_DISCONNECTED:
-      Serial.printf("[WS] Client %u disconnected\n", num);
+    case WStype_DISCONNECTED: {
+      String logMsg = "\n[WS] Client " + String(num) + " disconnected";
+      appendToLog(logMsg);
+      Serial.printf("[WS] Client %u disconnected (remaining: %d)\n", num, wsLaser.connectedClients());
       wsLaserConnected = wsLaser.connectedClients() > 0;
       wsInputBuffer = "";  // Buffer leeren
-      appendToLog("\n[WS disconnected]");
       oledNeedsUpdate = true;
       break;
+    }
+      
+    case WStype_ERROR: {
+      String logMsg = "\n[WS] ERROR client " + String(num);
+      appendToLog(logMsg);
+      Serial.printf("[WS] Client %u error!\n", num);
+      break;
+    }
       
     case WStype_TEXT:
       if (length > 0) {
         bytesFromWs += length;
         laserActive = true;
         lastLaserActivity = millis();
+        
+        // Debug: erste Nachricht loggen
+        static bool firstMsg = true;
+        if (firstMsg) {
+          appendToLog("\n[WS] First data: " + String(length) + " bytes");
+          firstMsg = false;
+        }
         
         // Daten zum Buffer hinzufügen
         wsInputBuffer += String((char*)payload, length);
@@ -1183,6 +1229,8 @@ void setup() {
   // WebSocket
   wsLaser.begin();
   wsLaser.onEvent(wsLaserEvent);
+  // Heartbeat mit sehr langen Intervallen (LaserGRBL unterstützt kein Ping/Pong)
+  wsLaser.enableHeartbeat(300000, 60000, 99);  // 5min ping, 1min timeout, 99 retries
   Serial.printf("WebSocket: OK (Port %d)\n", WS_LASER_PORT);
   Serial.println("  LaserGRBL: ws://" + WiFi.localIP().toString() + ":81/");
 
